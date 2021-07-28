@@ -29,39 +29,45 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use codec::{Decode, Encode};
+use frame_support::{decl_error, decl_event, decl_module, decl_storage, dispatch::DispatchResult};
+use frame_system as system;
+use mangata_primitives::{Balance, TokenId};
+use orml_tokens::MultiTokenCurrencyExtended;
+use sp_core::{RuntimeDebug, U256};
 use sp_std::prelude::*;
-use sp_core::{U256, RuntimeDebug};
-use frame_system::{self as system, ensure_signed};
-use frame_support::{
-	decl_error, decl_event, decl_module, decl_storage,
-	dispatch::{DispatchResult, DispatchError},
-};
-
-use codec::{Encode, Decode};
 
 use artemis_core::BridgedAssetId;
 
-#[cfg(test)]
-mod mock;
-
-#[cfg(test)]
-mod tests;
-
 #[derive(Encode, Decode, Clone, PartialEq, Eq, Default, RuntimeDebug)]
 pub struct AccountData {
-	pub free: U256
+	pub free: U256,
 }
 
-type AssetAccountData = AccountData;
 
-pub trait Trait: system::Trait {
+pub trait Trait: frame_system::Trait {
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+	type Currency: MultiTokenCurrencyExtended<Self::AccountId>;
 }
 
 decl_storage! {
 	trait Store for Module<T: Trait> as Asset {
-		pub TotalIssuance: map        hasher(blake2_128_concat) BridgedAssetId => U256;
-		pub Account:       double_map hasher(blake2_128_concat) BridgedAssetId, hasher(blake2_128_concat) T::AccountId => AssetAccountData;
+		pub NativeAsset get(fn get_native_asset_id): map hasher(blake2_128_concat) BridgedAssetId => TokenId;
+		pub BridgedAsset get(fn get_bridged_asset_id): map hasher(blake2_128_concat) TokenId => BridgedAssetId;
+	}
+	add_extra_genesis {
+		#[allow(clippy::type_complexity)]
+		config(bridged_assets_links): Vec<(TokenId, BridgedAssetId, Balance, T::AccountId)>;
+		build(|config: &GenesisConfig<T>|
+		{
+			for (native_asset_id, bridged_asset_id, initial_supply, initial_owner) in config.bridged_assets_links.iter(){
+				let initialized_asset_id: TokenId = T::Currency::create(&initial_owner, {*initial_supply}.into()).into();
+				assert!(initialized_asset_id == *native_asset_id, "Assets not initialized in the sequence of the asset ids provided");
+				Module::<T>::link_assets(native_asset_id.to_owned(), bridged_asset_id.to_owned());
+
+			}
+		}
+		)
 	}
 }
 
@@ -104,8 +110,6 @@ decl_module! {
 		// TODO: Calculate weight
 		#[weight = 0]
 		pub fn transfer(origin, asset_id: BridgedAssetId, to: T::AccountId, amount: U256) -> DispatchResult {
-			let who = ensure_signed(origin)?;
-			Self::do_transfer(asset_id, &who, &to, amount)?;
 			Ok(())
 		}
 
@@ -113,64 +117,12 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
-
-	pub fn free_balance(asset_id: BridgedAssetId, who: &T::AccountId) -> U256 {
-		<Account<T>>::get(asset_id, who).free
+	pub fn link_assets(native_asset_id: TokenId, bridged_asset_id: BridgedAssetId) {
+		NativeAsset::insert(bridged_asset_id, native_asset_id);
+		BridgedAsset::insert(native_asset_id, bridged_asset_id);
 	}
 
-	pub fn do_mint(asset_id: BridgedAssetId, who: &T::AccountId, amount: U256) -> DispatchResult  {
-		if amount.is_zero() {
-			return Ok(())
-		}
-		<Account<T>>::try_mutate(asset_id, who, |account| -> Result<(), DispatchError> {
-			let current_total_issuance = <TotalIssuance>::get(asset_id);
-			let new_total_issuance = current_total_issuance.checked_add(amount)
-			.ok_or(Error::<T>::TotalMintingOverflow)?;
-			account.free = account.free.checked_add(amount)
-				.ok_or(Error::<T>::FreeMintingOverflow)?;
-			<TotalIssuance>::insert(asset_id, new_total_issuance);
-			Ok(())
-		})?;
-		Self::deposit_event(RawEvent::Minted(asset_id, who.clone(), amount));
-		Ok(())
+	pub fn exists(bridged_asset_id: BridgedAssetId) -> bool {
+		NativeAsset::contains_key(bridged_asset_id)
 	}
-
-	pub fn do_burn(asset_id: BridgedAssetId, who: &T::AccountId, amount: U256) -> DispatchResult  {
-		if amount.is_zero() {
-			return Ok(())
-		}
-		<Account<T>>::try_mutate(asset_id, who, |account| -> Result<(), DispatchError> {
-			let current_total_issuance = <TotalIssuance>::get(asset_id);
-			let new_total_issuance = current_total_issuance.checked_sub(amount)
-			.ok_or(Error::<T>::TotalBurningUnderflow)?;
-			account.free = account.free.checked_sub(amount)
-				.ok_or(Error::<T>::FreeBurningUnderflow)?;
-			<TotalIssuance>::insert(asset_id, new_total_issuance);
-			Ok(())
-		})?;
-		Self::deposit_event(RawEvent::Burned(asset_id, who.clone(), amount));
-		Ok(())
-	}
-
-	fn do_transfer(
-		asset_id: BridgedAssetId,
-		from: &T::AccountId,
-		to: &T::AccountId,
-		amount: U256)
-	-> DispatchResult {
-		if amount.is_zero() || from == to {
-			return Ok(())
-		}
-		<Account<T>>::try_mutate(asset_id, from, |from_account| -> DispatchResult {
-			<Account<T>>::try_mutate(asset_id, to, |to_account| -> DispatchResult {
-				from_account.free = from_account.free.checked_sub(amount).ok_or(Error::<T>::InsufficientBalance)?;
-				// In theory we'll never hit overflow here since Sum(Account.free) == TotalIssuance.
-				to_account.free = to_account.free.checked_add(amount).ok_or(Error::<T>::FreeTransferOverflow)?;
-				Ok(())
-			})
-		})?;
-		Self::deposit_event(RawEvent::Transferred(asset_id, from.clone(), to.clone(), amount));
-		Ok(())
-	}
-
 }
