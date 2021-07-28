@@ -1,61 +1,107 @@
-use crate::mock::{new_tester, MockEvent, MockRuntime, System, AccountId, Origin, Asset, ERC20};
-use frame_support::{assert_ok};
-use frame_system as system;
-use sp_keyring::AccountKeyring as Keyring;
-use sp_core::H160;
-use hex_literal::hex;
+use crate::mock::{new_tester, AccountId, Asset, MockEvent, MockRuntime, Origin, System, ERC20};
 use codec::Decode;
-
+use frame_support::{assert_ok, assert_err};
+use frame_system as system;
+use hex_literal::hex;
+use sp_core::{H160, U256};
+use sp_keyring::AccountKeyring as Keyring;
+use mangata_primitives::TokenId;
+use orml_tokens::MultiTokenCurrency;
 use crate::RawEvent;
 
 use crate::payload::Payload;
 
 type TestAccountId = <MockRuntime as system::Trait>::AccountId;
 
-const RECIPIENT_ADDR_BYTES: [u8; 32] = hex!["8eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a48"];
-
 fn last_event() -> MockEvent {
-	System::events().pop().expect("Event expected").event
+    System::events().pop().expect("Event expected").event
 }
 
 #[test]
 fn mints_after_handling_ethereum_event() {
-	new_tester().execute_with(|| {
-		let token_addr = H160::repeat_byte(1);
+    new_tester().execute_with(|| {
+        let token_addr = H160::repeat_byte(1);
+        let id_of_first_minted_token: TokenId = 0;
+        let bob: AccountId = Keyring::Bob.into();
 
-		let recipient_addr = TestAccountId::decode(&mut &RECIPIENT_ADDR_BYTES[..]).unwrap();
-		let event: Payload<TestAccountId> = Payload {
-			sender_addr: hex!["cffeaaf7681c89285d65cfbe808b80e502696573"].into(),
-			recipient_addr,
-			token_addr,
-			amount: 10.into(),
-		};
+        let event: Payload<TestAccountId> = Payload {
+            sender_addr: hex!["cffeaaf7681c89285d65cfbe808b80e502696573"].into(),
+            recipient_addr: bob.clone(),
+            token_addr,
+            amount: 10.into(),
+        };
 
-		let bob: AccountId = Keyring::Bob.into();
+        // crating token with ID = 0
+        assert_ok!(ERC20::handle_event(event.clone()));
+        assert_eq!(Tokens::free_balance(id_of_first_minted_token, &bob), 10);
 
-		assert_ok!(ERC20::handle_event(event));
-		assert_eq!(Asset::free_balance(token_addr, &bob), 10.into());
-	});
+        // minting previously created token
+        assert_ok!(ERC20::handle_event(event));
+        assert_eq!(Tokens::free_balance(id_of_first_minted_token, &bob), 20);
+    });
 }
 
 #[test]
 fn burn_should_emit_bridge_event() {
-	new_tester().execute_with(|| {
-		let token_id = H160::repeat_byte(1);
-		let recipient = H160::repeat_byte(2);
-		let bob: AccountId = Keyring::Bob.into();
-		Asset::do_mint(token_id, &bob, 500.into()).unwrap();
+    new_tester().execute_with(|| {
+        let token_addr = H160::repeat_byte(1);
+        let recipient = H160::repeat_byte(2);
+        let bob: AccountId = Keyring::Bob.into();
 
-		assert_ok!(ERC20::burn(
-			Origin::signed(bob.clone()),
-			token_id,
-			recipient,
-			20.into()));
+        let event: Payload<TestAccountId> = Payload {
+            sender_addr: hex!["cffeaaf7681c89285d65cfbe808b80e502696573"].into(),
+            recipient_addr: bob.clone(),
+            token_addr,
+            amount: 20.into(),
+        };
+        assert_ok!(ERC20::handle_event(event.clone()));
 
-		assert_eq!(
-			MockEvent::test_events(RawEvent::Transfer(token_id, bob, recipient, 20.into())),
-			last_event()
-		);
+        assert_ok!(ERC20::burn(
+            Origin::signed(bob.clone()),
+            token_addr,
+            recipient,
+            20.into()
+        ));
 
-	});
+        assert_eq!(
+            MockEvent::test_events(RawEvent::Transfer(token_addr, bob, recipient, 20.into())),
+            last_event()
+        );
+    });
+}
+
+#[test]
+fn burn_should_return_error_on_overflow() {
+    new_tester().execute_with(|| {
+        let token_addr = H160::repeat_byte(1);
+        let recipient = H160::repeat_byte(2);
+        let bob: AccountId = Keyring::Bob.into();
+
+        assert_err!(
+            ERC20::burn(
+                Origin::signed(bob.clone()),
+                token_addr,
+                recipient,
+                U256::max_value()
+            ),
+            Error::<MockRuntime>::TooBigAmount,
+        );
+    });
+}
+
+#[test]
+fn handle_event_should_return_error_on_overflow() {
+    new_tester().execute_with(|| {
+        let event: Payload<TestAccountId> = Payload {
+            sender_addr: H160::repeat_byte(1),
+            recipient_addr: Keyring::Bob.into(),
+            token_addr: H160::repeat_byte(1),
+            amount: U256::max_value(),
+        };
+
+        assert_err!(
+            ERC20::handle_event(event.clone()),
+            Error::<MockRuntime>::TooBigAmount,
+        );
+    });
 }
