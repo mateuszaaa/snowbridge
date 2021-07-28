@@ -1,3 +1,5 @@
+// Copyright (C) 2020 Mangata team
+// Based on Snowfork bridge implementation
 //! # ETH
 //!
 //! An application that implements a bridged ETH asset.
@@ -18,16 +20,16 @@
 //!
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use frame_support::{decl_error, decl_event, decl_module, decl_storage, dispatch::DispatchResult};
 use frame_system::{self as system, ensure_signed};
-use frame_support::{
-	decl_error, decl_event, decl_module, decl_storage,
-	dispatch::DispatchResult,
-};
-use sp_std::prelude::*;
 use sp_core::{H160, U256};
+use sp_std::prelude::*;
 
-use artemis_core::{Application, BridgedAssetId};
 use artemis_asset as asset;
+use artemis_core::{Application, BridgedAssetId};
+use mangata_primitives::{Balance, TokenId};
+use orml_tokens::MultiTokenCurrencyExtended;
+use sp_std::convert::TryInto;
 
 mod payload;
 use payload::Payload;
@@ -63,6 +65,10 @@ decl_error! {
 	pub enum Error for Module<T: Trait> {
 		/// The submitted payload could not be decoded.
 		InvalidPayload,
+		/// Asset could not be burned
+		BurnFailure,
+		/// Passed amount is too big
+		TooBigAmount,
 	}
 }
 
@@ -77,22 +83,46 @@ decl_module! {
 		// Users should burn their holdings to release funds on the Ethereum side
 		// TODO: Calculate weights
 		#[weight = 0]
-		pub fn burn(origin, recipient: H160, amount: U256) -> DispatchResult {
+		pub fn burn(origin, recipient: H160, input_amount: U256) -> DispatchResult {
 			let who = ensure_signed(origin)?;
-			let asset_id: BridgedAssetId = H160::zero();
-			<asset::Module<T>>::do_burn(asset_id, &who, amount)?;
-			Self::deposit_event(RawEvent::Transfer(who.clone(), recipient, amount));
+			let asset_id = <asset::Module<T>>::get_native_asset_id(H160::zero());
+
+			let amount: Balance = input_amount
+				.try_into()
+				.or(Err(Error::<T>::TooBigAmount))?;
+
+			T::Currency::burn_and_settle(
+				asset_id.into(),
+				&who,
+				amount.into(),
+			).map_err(|_| Error::<T>::BurnFailure)?;
+
+			Self::deposit_event(RawEvent::Transfer(who.clone(), recipient, input_amount));
 			Ok(())
 		}
 
-	}
-}
+			}
+		}
 
 impl<T: Trait> Module<T> {
 
 	fn handle_event(payload: Payload<T::AccountId>) -> DispatchResult {
 		let asset_id: BridgedAssetId = H160::zero();
-		<asset::Module<T>>::do_mint(asset_id, &payload.recipient_addr, payload.amount)
+
+		let amount: Balance = payload
+			.amount
+			.try_into()
+			.or(Err(Error::<T>::TooBigAmount))?;
+
+		if !<asset::Module<T>>::exists(asset_id) {
+			let id: TokenId = T::Currency::create(&payload.recipient_addr, amount.into()).into();
+			<asset::Module<T>>::link_assets(id, asset_id);
+		} else {
+			let id = <asset::Module<T>>::get_native_asset_id(asset_id);
+			T::Currency::mint(id.into(), &payload.recipient_addr, amount.into())?;
+		}
+
+		Ok(())
 	}
 }
 

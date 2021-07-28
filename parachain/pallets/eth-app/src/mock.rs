@@ -8,7 +8,7 @@ use sp_runtime::{
 };
 use frame_system as system;
 
-use artemis_asset as asset;
+use orml_tokens;
 
 impl_outer_origin! {
 	pub enum Origin for MockRuntime {}
@@ -61,7 +61,7 @@ impl system::Trait for MockRuntime {
 	type MaximumBlockLength = MaximumBlockLength;
 	type AvailableBlockRatio = AvailableBlockRatio;
 	type Version = ();
-	type ModuleToIndex = ();
+    type PalletInfo = ();
 	type AccountData = ();
 	type OnNewAccount = ();
 	type OnKilledAccount = ();
@@ -69,7 +69,17 @@ impl system::Trait for MockRuntime {
 }
 
 impl asset::Trait for MockRuntime {
-	type Event = MockEvent;
+    type Event = MockEvent;
+    type Currency = orml_tokens::MultiTokenCurrencyAdapter<MockRuntime>;
+}
+
+impl orml_tokens::Trait for MockRuntime {
+    type Event = MockEvent;
+    type Balance = Balance;
+    type Amount = Amount;
+    type CurrencyId = TokenId;
+    type OnReceived = ();
+    type WeightInfo = ();
 }
 
 impl Trait for MockRuntime {
@@ -77,7 +87,7 @@ impl Trait for MockRuntime {
 }
 
 pub type System = system::Module<MockRuntime>;
-pub type Asset = asset::Module<MockRuntime>;
+pub type Tokens = <MockRuntime as asset::Trait>::Currency;
 pub type ETH = Module<MockRuntime>;
 
 pub fn new_tester() -> sp_io::TestExternalities {
