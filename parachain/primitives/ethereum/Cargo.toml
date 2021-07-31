@@ -22,18 +22,26 @@ version = "1.2.1"
 [dependencies.sp-std]
 default-features = false
 version = "2.0.0"
+git="https://github.com/mateuszaaa/substrate"
+rev="39d5c1bbe2eee21b4153f1bb309feff5535417e2"
 
 [dependencies.sp-core]
 default-features = false
 version = "2.0.0"
+git="https://github.com/mateuszaaa/substrate"
+rev="39d5c1bbe2eee21b4153f1bb309feff5535417e2"
 
 [dependencies.sp-io]
 default-features = false
 version = "2.0.0"
+git="https://github.com/mateuszaaa/substrate"
+rev="39d5c1bbe2eee21b4153f1bb309feff5535417e2"
 
 [dependencies.sp-runtime]
 default-features = false
 version = "2.0.0"
+git="https://github.com/mateuszaaa/substrate"
+rev="39d5c1bbe2eee21b4153f1bb309feff5535417e2"
 
 [features]
 default = ["std"]
